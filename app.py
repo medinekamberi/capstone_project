@@ -1,11 +1,10 @@
-from flask import Flask, request, jsonify,render_template, flash , redirect, url_for, session, logging
-from flask_sqlalchemy import SQLAlchemy 
+from flask import Flask, request, jsonify,render_template, flash , redirect, url_for, session, logging, json, make_response
+from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow #is an ORM/ODM/framework-agnostic library for converting complex datatypes, such as objects, to and from native Python datatypes.
-from werkzeug.security import generate_password_hash
-# from wtforms import Form, StringField, TextAreaField, PasswordField, validators
-# from passlib.hash import sha256_crypt
-# from functools import wraps
-
+from werkzeug.security import generate_password_hash,check_password_hash
+from sqlalchemy import exc
+from functools import wraps
+import jwt
 import os #python module deals with file path
 import datetime
 
@@ -14,6 +13,7 @@ app = Flask(__name__)
 #Setup sqlalchemy database URI
 basedir= os.path.abspath(os.path.dirname(__file__))
 #Database
+app.config['SECRET_KEY'] = 'mySecretKey'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://test:test@localhost/testapp'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 #Init db
@@ -25,7 +25,7 @@ class User(db.Model):
     id= db.Column(db.Integer(),primary_key=True, autoincrement=True)
     name = db.Column(db.String(64))
     surname=db.Column(db.String(64))
-    email=db.Column(db.String(64))
+    email=db.Column(db.String(64), unique=True)
     password=db.Column(db.String(256))
     role= db.Column(db.String(64))
     active=db.Column(db.Boolean)
@@ -36,7 +36,7 @@ class User(db.Model):
         self.name=name
         self.surname=surname
         self.email=email
-        self.password=generate_password_hash(password)
+        self.password=password
         self.role=role
         self.active=active
         self.created_at=created_at
@@ -116,24 +116,31 @@ transactions_schema= TransactionSchema(many=True, strict=True)
 @app.route('/')
 def index():
     return render_template('index.html')
-#Register Form Class
-# class RegisterForm(Form):
-#     name = StringField('Name', [validators.Length(min=1, max=50)])
-#     surname = StringField('surname', [validators.Length(min=4, max=25)])
-#     email = StringField('Email', [validators.Length(min=6, max=50)])
-#     password = PasswordField('Password', [
-#         validators.DataRequired(),
-#         validators.EqualTo('confirm', message='Passwords do not match')
-#     ])
-#     confirm = PasswordField('Confirm Password')
 
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'x-access-token' in request.headers:
+            token = request.headers['x-access-token']
+        if not token:
+            return jsonify({'message' : 'Token is missing'}), 401
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'])
+            current_user = User.query.filter_by(id=data['id']).first()
+        except:
+            return jsonify({'message' : 'Token is invalid'}), 401
+        return f(current_user, *args, **kwargs)
+    return decorated
 #Create a user
-@app.route('/signup',methods=['GET','POST'])
+@app.route('/users',methods=['GET','POST'])
+#@token_required
 def create_user():
     name=request.json['name']
     surname=request.json['surname']
     email=request.json['email']
-    password=request.json['password']
+    # password=request.json['password']
+    password = generate_password_hash(request.json['password'], method='sha256')
     role=request.json['role']
     active=request.json['active']
     created_at=datetime.datetime.now()
@@ -142,33 +149,61 @@ def create_user():
     new_user= User(name,surname,email,password,role,active,created_at,updated_at, accounts)
     
     db.session.add(new_user)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except exc.SQLAlchemyError:
+        print('something happened')
+        return json.dumps({'error': 'duplicate user', 'status': 409})
+    return user_schema.jsonify(new_user)
+#register a user
+# @app.route('/register', methods=['GET','POST'])
+# def register():
+#     if request.method == 'POST':
+#         reg_name = request.form['name']
+#         reg_email = request.form['email']
+#         reg_password= request.form['password']
+#         #confirm_password= request.form['']
+#         #check if username exist in database
+#         query = "SELECT name FROM user WHERE name= :name"
+#         if db.execute(query, {'name' : reg_name}).first():
+#             flash('Username already exists!')
+#             return render_template('signup.html')
+#         else:
+#             new_user= User(reg_name,reg_email,reg_password)
+#             db.session.add(new_user)
+#             db.session.commit()
+#             session['name']=reg_name
+#             return redirect(url_for('index'))
+#     return render_template('signup.html')
 
-    return user_schema.jsonify(new_user)  
 #Get all users
-@app.route('/signup', methods=['GET'])
-def get_users():
+@app.route('/users', methods=['GET'])
+@token_required
+def get_users(current_user):
     all_users = User.query.all()
     result = users_schema.dump(all_users)
 
     return jsonify(result.data)
 #Get user by ID
-@app.route('/signup/<id>', methods=['GET'])
-def get_user(id):
+@app.route('/users/<id>', methods=['GET'])
+@token_required
+def get_user(current_user,id):
     user= User.query.get(id)
     return user_schema.jsonify(user)
 
 #Delete user by ID
-@app.route('/signup/<id>', methods=['DELETE'])
-def delete_user(id):
+@app.route('/users/<id>', methods=['DELETE'])
+@token_required
+def delete_user(current_user,id):
     user = User.query.get(id)
     db.session.delete(user)
     db.session.commit()
     
     return user_schema.jsonify(user)
 #Update a user
-@app.route('/signup/<id>', methods=['PUT'])
-def update_user(id):
+@app.route('/users/<id>', methods=['PUT'])
+@token_required
+def update_user(current_user,id):
     user = User.query.get(id)
     print(user)
     name=request.json['name']
@@ -190,9 +225,25 @@ def update_user(id):
     db.session.commit()
 
     return user_schema.jsonify(user)
+#login method
+@app.route('/login')
+def login():
+    auth = request.authorization
+    
+    if not auth or not auth.username or not auth.password:
+        return make_response('Could not verify', 401, {'WWW-Authenticate' : 'Basic realm="Login required!"'})
+    user = User.query.filter_by(email=auth.username).first()
+
+    if not user:
+        return make_response('Could not verify', 401, {'WWW-Authenticate' : 'Basic realm="Login required!"'})
+    if check_password_hash(user.password, auth.password):
+        token= jwt.encode({'id' : user.id, 'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=30)}, app.config['SECRET_KEY'])
+        return jsonify({'token' :token.decode('UTF-8')})
+    return make_response('Could not verify', 401, {'WWW-Authentication' : 'Basic realm="Login required!'})
+
 
 #Create an account
-@app.route('/account', methods=['POST'])
+@app.route('/accounts', methods=['POST'])
 def create_account():
     balance = request.json['balance']
     currency=request.json['currency']
@@ -208,7 +259,7 @@ def create_account():
     return account_schema.jsonify(new_account)
 
 #Get all accounts
-@app.route('/account', methods=['GET'])
+@app.route('/accounts', methods=['GET'])
 def get_accounts():
     all_accounts = Account.query.all()
     result = accounts_schema.dump(all_accounts)
@@ -216,13 +267,13 @@ def get_accounts():
     return jsonify(result.data)
 
 #Get account by id
-@app.route('/account/<id>', methods=['GET'])
+@app.route('/accounts/<id>', methods=['GET'])
 def get_account(id):
     account = Account.query.get(id)
     
     return account_schema.jsonify(account)
 #Update an account
-@app.route('/account/<id>', methods=['PUT'])
+@app.route('/accounts/<id>', methods=['PUT'])
 def update_account(id):
     account = Account.query.get(id)
 
@@ -238,7 +289,7 @@ def update_account(id):
 
     return account_schema.jsonify(account)
 #Delete an account
-@app.route('/account/<id>', methods=['DELETE'])
+@app.route('/accounts/<id>', methods=['DELETE'])
 def delete_account(id):
     account = Account.query.get(id)
     db.session.delete(account)
@@ -248,7 +299,7 @@ def delete_account(id):
 
 
 #Create a transaction, amount is always 0!!
-@app.route('/transaction', methods=['POST'])
+@app.route('/transactions', methods=['POST'])
 def create_transaction():
     title= request.json['title']
     amount= request.json['title']
@@ -264,7 +315,7 @@ def create_transaction():
 
     return transaction_schema.jsonify(new_transaction)      
 #Update a transaction 
-@app.route('/transaction/<id>', methods=['PUT'])
+@app.route('/transactions/<id>', methods=['PUT'])
 def update_transaction(id):
     transaction = Transaction.query.get(id)
     title = request.json['title']
@@ -281,20 +332,20 @@ def update_transaction(id):
     return transaction_schema.jsonify(transaction)
     
 #Get all transactions
-@app.route('/transaction', methods=['GET'])
+@app.route('/transactions', methods=['GET'])
 def get_transactions():
     all_transactions = Transaction.query.all()
     result = transactions_schema.dump(all_transactions)
     return jsonify(result.data)
 
 #Get single transaction
-@app.route('/transaction/<id>', methods=['GET'])
+@app.route('/transactions/<id>', methods=['GET'])
 def get_transaction(id):
     transaction = Transaction.query.get(id)
     return transaction_schema.jsonify(transaction)
 
 #Create a category
-@app.route('/category', methods=['POST'])
+@app.route('/categories', methods=['POST'])
 def create_category():
     title = request.json['title']
     
@@ -306,18 +357,18 @@ def create_category():
     return category_schema.jsonify(new_category)
 
 #Get a category
-@app.route('/category/<id>', methods=["GET"])
+@app.route('/categories/<id>', methods=["GET"])
 def get_category(id):
     category = Category.query.get(id)
     return category_schema.jsonify(category)
 #Get all categories
-@app.route('/category', methods=['GET'])
+@app.route('/categories', methods=['GET'])
 def get_categories():
     all_categories= Category.query.all()
     result= categories_schema.dump(all_categories)
     return jsonify(result.data)
 #Update a category
-@app.route('/category/<id>', methods=['PUT'])
+@app.route('/categories/<id>', methods=['PUT'])
 def update_category(id):
     category = Category.query.get(id)
 
@@ -330,7 +381,7 @@ def update_category(id):
     return category_schema.jsonify(category)
 
 #Delete a category
-@app.route('/category/<id>', methods=['DELETE'])
+@app.route('/categories/<id>', methods=['DELETE'])
 def delete_category(id):
     category = Category.query.get(id)
     db.session.delete(category)
