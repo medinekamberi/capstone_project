@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify,render_template, flash , redirect, url_for, session, logging, json, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow #is an ORM/ODM/framework-agnostic library for converting complex datatypes, such as objects, to and from native Python datatypes.
+from flask_cors import CORS,cross_origin
 from werkzeug.security import generate_password_hash,check_password_hash
 from sqlalchemy import exc
 from functools import wraps
@@ -16,6 +17,8 @@ basedir= os.path.abspath(os.path.dirname(__file__))
 app.config['SECRET_KEY'] = 'mySecretKey'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://test:test@localhost/testapp'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['CORS_HEADERS'] = 'Content-Type'
+cors = CORS(app)
 #Init db
 db= SQLAlchemy(app)
 marshmallow= Marshmallow(app)
@@ -32,7 +35,7 @@ class User(db.Model):
     created_at=db.Column(db.DateTime)
     updated_at=db.Column(db.DateTime)
     accounts=db.relationship('Account', backref='user', lazy=True)
-    def __init__(self,name,surname,email,password,role,active,created_at,updated_at, accounts):
+    def __init__(self,name,surname,email,password,role,active,created_at,updated_at):
         self.name=name
         self.surname=surname
         self.email=email
@@ -45,7 +48,7 @@ class User(db.Model):
 #User schema
 class UserSchema(marshmallow.Schema):
     class Meta:
-        fields=('name','surname','email','password','role','active','created_at','updated_at', 'accounts')
+        fields=('name','surname','email','password','role','active','created_at','updated_at')
 #Init schema 
 user_schema=UserSchema(strict=True)
 users_schema = UserSchema(many=True, strict=True)
@@ -133,8 +136,7 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     return decorated
 #Create a user
-@app.route('/users',methods=['GET','POST'])
-#@token_required
+@app.route('/users',methods=['POST'])
 def create_user():
     name=request.json['name']
     surname=request.json['surname']
@@ -145,8 +147,7 @@ def create_user():
     active=request.json['active']
     created_at=datetime.datetime.now()
     updated_at=datetime.datetime.now()
-    accounts=request.json['accounts']
-    new_user= User(name,surname,email,password,role,active,created_at,updated_at, accounts)
+    new_user= User(name,surname,email,password,role,active,created_at,updated_at)
     
     db.session.add(new_user)
     try:
@@ -155,26 +156,6 @@ def create_user():
         print('something happened')
         return json.dumps({'error': 'duplicate user', 'status': 409})
     return user_schema.jsonify(new_user)
-#register a user
-# @app.route('/register', methods=['GET','POST'])
-# def register():
-#     if request.method == 'POST':
-#         reg_name = request.form['name']
-#         reg_email = request.form['email']
-#         reg_password= request.form['password']
-#         #confirm_password= request.form['']
-#         #check if username exist in database
-#         query = "SELECT name FROM user WHERE name= :name"
-#         if db.execute(query, {'name' : reg_name}).first():
-#             flash('Username already exists!')
-#             return render_template('signup.html')
-#         else:
-#             new_user= User(reg_name,reg_email,reg_password)
-#             db.session.add(new_user)
-#             db.session.commit()
-#             session['name']=reg_name
-#             return redirect(url_for('index'))
-#     return render_template('signup.html')
 
 #Get all users
 @app.route('/users', methods=['GET'])
@@ -245,7 +226,7 @@ def login():
 #Create an account
 @app.route('/accounts', methods=['POST'])
 def create_account():
-    balance = request.json['balance']
+    balance = 0
     currency=request.json['currency']
     created_at=datetime.datetime.now()
     updated_at=datetime.datetime.now()
@@ -298,16 +279,24 @@ def delete_account(id):
     return account_schema.jsonify(account)
 
 
-#Create a transaction, amount is always 0!!
+#Create a transaction
 @app.route('/transactions', methods=['POST'])
 def create_transaction():
     title= request.json['title']
-    amount= request.json['title']
+    amount= request.json['amount']
     transaction_type= request.json['transaction_type']
     created_at=datetime.datetime.now()
     updated_at=datetime.datetime.now()
     account_id = request.json['account_id']
-    
+    if transaction_type == 'income':
+        acc = db.session.query(Account).filter(Account.id == account_id).first()
+        print(acc)
+        print(acc.balance)
+        acc.balance = acc.balance + amount
+    if transaction_type == 'expense':
+        acc = db.session.query(Account).filter(Account.id == account_id).first()
+        acc.balance = acc.balance - amount
+        print(acc)
     new_transaction= Transaction(title,amount,transaction_type,created_at,updated_at,account_id)
 
     db.session.add(new_transaction)
