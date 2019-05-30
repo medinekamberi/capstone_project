@@ -10,7 +10,7 @@ import os #python module deals with file path
 import datetime
 
 #Init app
-app = Flask(__name__)
+app = Flask(__name__, static_url_path='/static')
 #Setup sqlalchemy database URI
 basedir= os.path.abspath(os.path.dirname(__file__))
 #Database
