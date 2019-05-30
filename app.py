@@ -120,6 +120,14 @@ transactions_schema= TransactionSchema(many=True, strict=True)
 def index():
     return render_template('index.html')
 
+@app.route('/signup')
+def signup():
+    return render_template('signup.html')
+
+@app.route('/login-page')
+def login_page():
+    return render_template('login.html')
+    
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
