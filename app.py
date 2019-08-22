@@ -170,8 +170,9 @@ def create_user():
 @token_required
 def get_users(current_user):
     all_users = User.query.all()
+    print(all_users)
     result = users_schema.dump(all_users)
-
+    print(result)
     return jsonify(result.data)
 #Get user by ID
 @app.route('/users/<id>', methods=['GET'])
@@ -265,14 +266,15 @@ def get_account(id):
 @app.route('/accounts/<id>', methods=['PUT'])
 def update_account(id):
     account = Account.query.get(id)
-
     balance= request.json['balance']
     currency = request.json['currency']
+    account.updated_at = datetime.datetime.now()
     user_id=request.json['user_id']
 
-    account.balance=balance
-    account.currency=currency
-    account.user_id=user_id
+    # account.balance = balance
+    # account.currency = currency
+    
+   # account.user_id=user_id
 
     db.session.commit()
 
@@ -365,7 +367,6 @@ def get_categories():
     result= categories_schema.dump(all_categories)
     return jsonify(result.data)
 #Update a category
-@app.route('/categories/<id>', methods=['PUT'])
 def update_category(id):
     category = Category.query.get(id)
 
